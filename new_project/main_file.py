@@ -72,7 +72,7 @@ class Picture:
         # 自变量  ves最大计算能力
         v_volume_list = np.arange(5, 10, 0.5)  # 范围
         # 固定参数
-        break_list =  np.arange(0, 100, 0.5)  # ves判断抢占的时间点
+        break_list = np.arange(0, 100, 0.5)  # ves判断抢占的时间点
         n_task = 30
         para_abv = para_abv_func()
         my_res, alg1_res, alg2_res = [[], []], [[], []], [[], []]
@@ -123,9 +123,60 @@ class Picture:
         plt.rcParams['axes.unicode_minus'] = False
         plt.legend()
         plt.show()
+        plt.clf()
+
+    def pic4(self):
+        """my_alg vs alg3"""
+        print('--pic4--')
+        # 自变量  任务数量
+        task_number_list = np.arange(30, 100, 1)  # 范围
+        t_dev = np.arange(0.1, 500000, 0.5)  # 间隔0.3检测
+        # 固定参数
+        max_volume_vec_f = 10  # ves最大计算能力
+        para_abv = para_abv_func()
+        my_res, alg3_res = [[], []], [[], []]
+        for n_task in list(task_number_list):
+            # print(self.type_pic[0])
+            fleet = Fleet(n_task)  # 生成任务集
+            print('--my--')
+            res = algs.my_alg_func(task_fleet=fleet, n_pic='pic4', n_task=fleet.number,
+                                   volume_vec_f=max_volume_vec_f, T_MAX_i=None, t_dev=t_dev,
+                                   para_abv=para_abv)  # [[], []]
+            my_res[0].append(n_task)
+            my_res[1].append(res)
+            fleet.clear()
+            print('--alg3--')
+            res = algs.alg3_func(task_fleet=fleet, n_pic='pic4', n_task=fleet.number,
+                                 volume_vec_f=max_volume_vec_f, T_MAX_i=None, t_dev=t_dev,
+                                 para_abv=para_abv)  # [[], []]
+            alg3_res[0].append(n_task)
+            alg3_res[1].append(res)
+            fleet.clear()
+
+        else:
+            print('结束')
+
+        '绘图'
+        index = 0
+        for plt_res in [my_res, alg3_res]:
+            if index == 0:
+                label = 'my_alg'
+                marker = '^'
+            else:
+                label = '对比3'
+                marker = '*'
+            index += 1
+            plt.plot(plt_res[0], plt_res[1], label=label, marker=marker)
+        plt.xlabel(xlabel='车辆数')
+        plt.ylabel(ylabel='任务切换次数', rotation=1)
+        plt.rcParams['font.sans-serif'] = [u'SimHei']
+        plt.rcParams['axes.unicode_minus'] = False
+        plt.legend()
+        plt.show()
 
 
 if __name__ == "__main__":
     # 5张图
     pic = Picture()
     pic.pic1()
+    pic.pic4()
