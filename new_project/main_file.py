@@ -360,22 +360,31 @@ if __name__ == "__main__":
     # 5张图
     pic = Picture()
     fig1 = plt.figure()
-    fig2 = plt.figure()
-    fig3 = plt.figure()
-    fig4 = plt.figure()
-    fig5 = plt.figure()
-
-
     ax1 = fig1.add_subplot(1, 1, 1)
-    ax2 = fig2.add_subplot(1, 1, 1)
-    ax3 = fig3.add_subplot(1, 1, 1)
-    ax4 = fig4.add_subplot(1, 1, 1)
-    ax5 = fig5.add_subplot(1, 1, 1)
-
-
     ax1 = pic.pic1(ax1)
-    ax2 = pic.pic2(ax2)
-    ax3 = pic.pic3(ax3)
-    ax4 = pic.pic4(ax4)
-    ax5 = pic.pic5(ax5)
     plt.show()
+
+    pic = Picture()
+    fig1 = plt.figure()
+    ax1 = fig1.add_subplot(1, 1, 1)
+    ax1 = pic.pic2(ax1)
+    plt.show()
+
+    pic = Picture()
+    fig1 = plt.figure()
+    ax1 = fig1.add_subplot(1, 1, 1)
+    ax1 = pic.pic3(ax1)
+    plt.show()
+
+    pic = Picture()
+    fig1 = plt.figure()
+    ax1 = fig1.add_subplot(1, 1, 1)
+    ax1 = pic.pic4(ax1)
+    plt.show()
+
+    pic = Picture()
+    fig1 = plt.figure()
+    ax1 = fig1.add_subplot(1, 1, 1)
+    ax1 = pic.pic5(ax1)
+    plt.show()
+
