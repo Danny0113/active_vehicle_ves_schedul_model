@@ -73,7 +73,6 @@ def get_calcu_time(Ci, f_max, t_interrupt_i=0, be_break=False):
 def calcu_failure_rate(fleet, first_failure_list):
     # 计算失败率
     num_failure = 0
-
     for num in fleet.ini_list:
         if num in first_failure_list:
             num_failure += 1
@@ -84,6 +83,24 @@ def calcu_failure_rate(fleet, first_failure_list):
 
 
 def clean_task(fleet):
+    # 计算使出边界的用时
+    list_task_f = []
+    for n in fleet.ini_list:
+        if fleet.toward[n] == -1:  # 左
+            dis = fleet.position[n][0] - (-500)
+            use_t = ((dis / 1000) / 40) * 3600  # 秒
+            if use_t < fleet.pri_j_task_fleet_const[n][0]:
+                list_task_f.append(n)
+        else:
+            dis = 500 - fleet.position[n][0]
+            use_t = ((dis / 1000) / 40) * 3600  # 秒
+            if use_t < fleet.pri_j_task_fleet_const[n][0]:
+                list_task_f.append(n)
+        fleet.rest_use_t[n] = use_t
+    return list_task_f, fleet
+
+
+def clean_task_(fleet):
     # 计算使出边界的用时
     list_task_f = []
     for n in fleet.ini_list:
@@ -147,7 +164,16 @@ def judge_rest_task(task_fleet, task_pri_df):
             continue
 
     return task_pri_df, False  # 不满足
-
+def calcu_failure_rate_(fleet, first_failure_list):
+    # 计算失败率
+    num_failure = 0
+    for num in fleet.ini_list:
+        if num in first_failure_list:
+            num_failure += 1
+        elif fleet.pri_j_task_fleet_const[num][0] < fleet.task_finish_t[num]:
+            num_failure += 1
+    rate = num_failure / fleet.number
+    return rate
 
 def my_alg_func(task_fleet, n_pic, n_task, volume_vec_f, T_MAX_i, t_dev, para_abv):
     """动态调整任务优先级  抢占式调度
@@ -157,9 +183,8 @@ def my_alg_func(task_fleet, n_pic, n_task, volume_vec_f, T_MAX_i, t_dev, para_ab
         n_task: pic3 and 4
         t_dev: pic5
         """
-
     # 计算不能在最大时延内完成的任务
-    task_list_failure, task_fleet = clean_task(fleet=task_fleet)
+    task_list_failure, task_fleet = clean_task_(fleet=task_fleet)
     # 计算任务的执行时间
     for num_task in task_fleet.ini_list:
         task_fleet.task_calcu_t_before_assign[num_task] = get_calcu_time(
@@ -177,7 +202,8 @@ def my_alg_func(task_fleet, n_pic, n_task, volume_vec_f, T_MAX_i, t_dev, para_ab
         task_fleet.task_wait_t_before_assign[num] = 0
     # 完不成的不考虑
     df2 = df2.drop(index=task_list_failure)
-
+    times = 0  # 切换次数
+    index_t_dev = 0
     while df2.empty is False:  # 存在未调度的任务
 
         rest_list = list(df2.index)
@@ -190,7 +216,7 @@ def my_alg_func(task_fleet, n_pic, n_task, volume_vec_f, T_MAX_i, t_dev, para_ab
         df2 = pd.DataFrame(df.values.T, index=df.columns, columns=df.index)
         df2 = df2.sort_values(by=0, ascending=False)
         # 判断是否存在存在满足调整优先级条件的task
-        df2, adj_flag = judge_rest_task(task_fleet=task_fleet, task_pri_df=df2)
+        df2, exist = judge_rest_task(task_fleet=task_fleet, task_pri_df=df2)
         # 优先级最高任务
         num_task = df2.index[0]
         # ves是否立即满足计算需求
@@ -213,32 +239,71 @@ def my_alg_func(task_fleet, n_pic, n_task, volume_vec_f, T_MAX_i, t_dev, para_ab
             # 3.更新ves容量
             one_ves.rest_volume -= task_volume
         else:  # 当前容量不足
-            data = pd.Series(one_ves.task_rest_t_list)
-            series = data.sort_values(ascending=True)
-            min_key = series.keys()[0]
-            # 1.更新当前时刻
-            one_ves.current += series[min_key]
-            # 2.剔除一个任务
-            del one_ves.task_rest_t_list[min_key]
-            # 3.释放空间
-            one_ves.rest_volume += task_fleet.pri_j_task_fleet_const[min_key][1]
-            # 4.更新任务剩余完成时间队列
-            task_rest_t_list = {}
-            for key in one_ves.task_rest_t_list:
-                one_ves.task_rest_t_list[key] = one_ves.task_rest_t_list[key] - series[min_key]
-                rest_t = one_ves.task_rest_t_list[key]
-                task_rest_t = pd.Series(one_ves.task_rest_t_list)
+            if exist is True and one_ves.current > t_dev[index_t_dev]:  # 尝试直接抢占
+                index_t_dev += 1
+                # 找到一个可以被抢占的任务，容量满足
+                task_replaced, task_volume_replace = find_a_task(task_volume, task_fleet, one_ves)
+                # task_replaced = judge_task_replaced(task_fleet, task_replaced, num_task)
+                # if task_fleet.pri_j_task_fleet_const[task_replaced][0] - task_fleet.task_calcu_t_before_assign[task_replaced] < task_fleet.task_calcu_t_before_assign[num_task]:
+                #     task_replaced = None
+                if task_replaced is not None and (task_fleet.pri_j_task_fleet_const[task_replaced][0] - (
+                        task_fleet.task_calcu_t_before_assign[task_replaced] + task_fleet.task_wait_t[task_replaced]) >
+                                                  task_fleet.task_calcu_t_before_assign[num_task]):  # 存在可被替换
+                    one_ves = replace(task_fleet, one_ves, num_task, task_replaced)  # 替换
+                    times += 1
 
+                    # --基站中替换--
+                    one_ves.task_rest_t_list.pop(task_replaced)
+                    # 任务等待时间
+                    task_fleet.task_wait_t[num_task] = one_ves.current - 0
+                    # 任务的计算时间
+                    task_fleet.task_calcu_t[num_task] = get_calcu_time(
+                        Ci=task_fleet.pri_j_task_fleet_const[num_task][1],
+                        f_max=volume_vec_f)
+                    # 完成时间
+                    task_fleet.task_finish_t[num_task] = task_fleet.task_wait_t[num_task] + task_fleet.task_calcu_t[
+                        num_task]
+                    # 更新ves
+                    # 1.任务剩余完成时间队列
+                    one_ves.task_rest_t_list[num_task] = task_fleet.task_calcu_t[num_task]
+                    # --被替换任务放入优先级list中--
+                    # df2.append(0.1, index=task_replaced)
+                    df2.loc[task_replaced] = 0.1
+                    # 2.更新优先级队列
+                    df2 = df2.drop(index=num_task)
+                    # 3.更新ves容量
+                    one_ves.rest_volume -= task_volume
+                    one_ves.rest_volume += task_volume_replace
+                else:  # 不
+                    continue
+                # 如果存在，则替换出
+                # 更新ves
+            else:
+                data = pd.Series(one_ves.task_rest_t_list)
+                series = data.sort_values(ascending=True)
+                try:
+                    min_key = series.keys()[0]
+                except IndexError:
+                    print('err:', IndexError)
+                # 1.更新当前时刻
+                one_ves.current += series[min_key]
+                # 2.剔除一个任务
+                del one_ves.task_rest_t_list[min_key]
+                # 3.释放空间
+                one_ves.rest_volume += task_fleet.pri_j_task_fleet_const[min_key][1]
+                # 4.更新任务剩余完成时间队列
+                task_rest_t_list = {}
+                for key in one_ves.task_rest_t_list:
+                    one_ves.task_rest_t_list[key] = one_ves.task_rest_t_list[key] - series[min_key]
+                    rest_t = one_ves.task_rest_t_list[key]
+                    task_rest_t = pd.Series(one_ves.task_rest_t_list)
     # 计算失败率
     f_fate = calcu_failure_rate(fleet=task_fleet, first_failure_list=task_list_failure)
-
     print('任务分配完毕')
-    if n_pic in ['pic1', 'pic2', 'pic3']:
+    if n_pic in ['pic1', 'pic2', 'pic3', 'pic5']:
         return f_fate  # '任务失败率'
     elif n_pic == 'pic4':
-        return '任务切换次数'
-    elif n_pic == 'pic5':
-        return '任务失败率'
+        return times  # '任务切换次数'
 
 
 def alg1_func(task_fleet, n_pic, n_task, volume_vec_f, T_MAX_i, t_dev, para_abv):
@@ -299,7 +364,7 @@ def alg1_func(task_fleet, n_pic, n_task, volume_vec_f, T_MAX_i, t_dev, para_abv)
     f_fate = calcu_failure_rate(fleet=task_fleet, first_failure_list=task_list_failure)
     print('任务分配完毕')
 
-    if n_pic in ['pic1', 'pic4', 'pic3', 'pic5']:
+    if n_pic in ['pic1', 'pic2', 'pic3', 'pic5']:
         return f_fate  # '任务失败率'
 
 
@@ -387,7 +452,7 @@ def alg2_func(task_fleet, n_pic, n_task, volume_vec_f, t_dev, T_MAX_i, para_abv)
 
     print('任务分配完毕')
 
-    if n_pic in ['pic1', 'pic4', 'pic3', 'pic5']:
+    if n_pic in ['pic1', 'pic2', 'pic3', 'pic5']:
         return f_fate  # '任务失败率'
 
 
@@ -401,8 +466,6 @@ def find_a_task(volume_task, task_fleet, one_ves):
 
 
 def replace(task_fleet, one_ves, num_task, task_replaced):
-
-
     return one_ves
 
 
@@ -519,4 +582,136 @@ def alg3_func(task_fleet, n_pic, n_task, volume_vec_f, T_MAX_i, t_dev, para_abv)
 
     print('任务分配完毕')
     if n_pic == 'pic4':
+        return times  # '任务切换次数'
+
+def my_alg_pic5(task_fleet, n_pic, n_task, volume_vec_f, T_MAX_i, t_dev, para_abv):
+    """动态调整任务优先级  抢占式调度
+        n_pic: 实验类型
+        volume_vec_f: pic1
+        T_MAX_i: pic2
+        n_task: pic3 and 4
+        t_dev: pic5
+        """
+    # 计算不能在最大时延内完成的任务
+    task_list_failure, task_fleet = clean_task_(fleet=task_fleet)
+    # 计算任务的执行时间
+    for num_task in task_fleet.ini_list:
+        task_fleet.task_calcu_t_before_assign[num_task] = get_calcu_time(
+            Ci=task_fleet.pri_j_task_fleet_const[num_task][1],
+            f_max=volume_vec_f)
+    # 计算任务优先级-->优先级队列  相同则按T_max_i: 小-->大
+    task_pri_dict = calcu_task_pri_in_list(task_fleet_const=task_fleet.pri_j_task_fleet_const,
+                                           task_list=task_fleet.ini_list, para=para_abv)
+    df = pd.DataFrame([task_pri_dict])  # df 好处理
+    df2 = pd.DataFrame(df.values.T, index=df.columns, columns=df.index)
+    df2 = df2.sort_values(by=0, ascending=False)  # 按优先级排列
+    one_ves = Ves(volume_vec_f)
+    # 初始化等待时间
+    for num in task_fleet.ini_list:
+        task_fleet.task_wait_t_before_assign[num] = 0
+    # 完不成的不考虑
+    df2 = df2.drop(index=task_list_failure)
+    times = 0  # 切换次数
+    index_t_dev = 0
+    while df2.empty is False:  # 存在未调度的任务
+
+        rest_list = list(df2.index)
+        # 更新任务等待时间
+        for num in rest_list:
+            task_fleet.task_wait_t_before_assign[num] = one_ves.current
+        # 计算任务优先级
+        task_pri_dict = update_pri_in_my_alg(fleet=task_fleet, rest_task_list=rest_list)
+        df = pd.DataFrame([task_pri_dict])  # df 好处理
+        df2 = pd.DataFrame(df.values.T, index=df.columns, columns=df.index)
+        df2 = df2.sort_values(by=0, ascending=False)
+        # 判断是否存在存在满足调整优先级条件的task
+        df2, exist = judge_rest_task(task_fleet=task_fleet, task_pri_df=df2)
+        # 优先级最高任务
+        num_task = df2.index[0]
+        # ves是否立即满足计算需求
+        task_volume = task_fleet.pri_j_task_fleet_const[num_task][1]
+        # 容量是否满足
+        if one_ves.rest_volume >= task_volume:
+            # 任务等待时间
+            task_fleet.task_wait_t[num_task] = one_ves.current - 0
+            # 任务的计算时间
+            task_fleet.task_calcu_t[num_task] = get_calcu_time(Ci=task_fleet.pri_j_task_fleet_const[num_task][1],
+                                                               f_max=volume_vec_f)
+            # 完成时间
+            task_fleet.task_finish_t[num_task] = task_fleet.task_wait_t[num_task] + task_fleet.task_calcu_t[
+                num_task]
+            task_finish_t = pd.Series(task_fleet.task_finish_t)
+            # 更新ves
+            # 1.任务剩余完成时间队列
+            one_ves.task_rest_t_list[num_task] = task_fleet.task_calcu_t[num_task]
+            # 2.更新优先级队列
+            df2 = df2.drop(index=num_task)
+            # 3.更新ves容量
+            one_ves.rest_volume -= task_volume
+        else:  # 当前容量不足
+            if exist is True and one_ves.current > t_dev[index_t_dev]:  # 尝试直接抢占
+                index_t_dev += 1
+                # 找到一个可以被抢占的任务，容量满足
+                task_replaced, task_volume_replace = find_a_task(task_volume, task_fleet, one_ves)
+                # task_replaced = judge_task_replaced(task_fleet, task_replaced, num_task)
+                # if task_fleet.pri_j_task_fleet_const[task_replaced][0] - task_fleet.task_calcu_t_before_assign[task_replaced] < task_fleet.task_calcu_t_before_assign[num_task]:
+                #     task_replaced = None
+                if task_replaced is not None and (task_fleet.pri_j_task_fleet_const[task_replaced][0] - (
+                        task_fleet.task_calcu_t_before_assign[task_replaced] + task_fleet.task_wait_t[
+                    task_replaced]) >
+                                                  task_fleet.task_calcu_t_before_assign[num_task]):  # 存在可被替换
+                    one_ves = replace(task_fleet, one_ves, num_task, task_replaced)  # 替换
+                    times += 1
+
+                    # --基站中替换--
+                    one_ves.task_rest_t_list.pop(task_replaced)
+                    # 任务等待时间
+                    task_fleet.task_wait_t[num_task] = one_ves.current - 0
+                    # 任务的计算时间
+                    task_fleet.task_calcu_t[num_task] = get_calcu_time(
+                        Ci=task_fleet.pri_j_task_fleet_const[num_task][1],
+                        f_max=volume_vec_f)
+                    # 完成时间
+                    task_fleet.task_finish_t[num_task] = task_fleet.task_wait_t[num_task] + task_fleet.task_calcu_t[
+                        num_task]
+                    # 更新ves
+                    # 1.任务剩余完成时间队列
+                    one_ves.task_rest_t_list[num_task] = task_fleet.task_calcu_t[num_task]
+                    # --被替换任务放入优先级list中--
+                    # df2.append(0.1, index=task_replaced)
+                    df2.loc[task_replaced] = 0.1
+                    # 2.更新优先级队列
+                    df2 = df2.drop(index=num_task)
+                    # 3.更新ves容量
+                    one_ves.rest_volume -= task_volume
+                    one_ves.rest_volume += task_volume_replace
+                else:  # 不
+                    continue
+                # 如果存在，则替换出
+                # 更新ves
+            else:
+                data = pd.Series(one_ves.task_rest_t_list)
+                series = data.sort_values(ascending=True)
+                try:
+                    min_key = series.keys()[0]
+                except IndexError:
+                    print('err:', IndexError)
+                # 1.更新当前时刻
+                one_ves.current += series[min_key]
+                # 2.剔除一个任务
+                del one_ves.task_rest_t_list[min_key]
+                # 3.释放空间
+                one_ves.rest_volume += task_fleet.pri_j_task_fleet_const[min_key][1]
+                # 4.更新任务剩余完成时间队列
+                task_rest_t_list = {}
+                for key in one_ves.task_rest_t_list:
+                    one_ves.task_rest_t_list[key] = one_ves.task_rest_t_list[key] - series[min_key]
+                    rest_t = one_ves.task_rest_t_list[key]
+                    task_rest_t = pd.Series(one_ves.task_rest_t_list)
+    # 计算失败率
+    f_fate = calcu_failure_rate_(fleet=task_fleet, first_failure_list=task_list_failure)
+    print('任务分配完毕')
+    if n_pic in ['pic1', 'pic2', 'pic3', 'pic5']:
+        return f_fate  # '任务失败率'
+    elif n_pic == 'pic4':
         return times  # '任务切换次数'
